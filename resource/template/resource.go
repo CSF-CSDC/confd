@@ -9,29 +9,29 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"text/template"
 
+	"confd/backends"
+	"confd/backends/sdc"
+	"confd/log"
 	"github.com/BurntSushi/toml"
-	"github.com/kelseyhightower/confd/backends"
-	"github.com/kelseyhightower/confd/log"
-	util "github.com/kelseyhightower/confd/util"
 	"github.com/kelseyhightower/memkv"
 	"github.com/xordataexchange/crypt/encoding/secconf"
 )
 
 type Config struct {
-	ConfDir       string `toml:"confdir"`
+	ConfDir       string
 	ConfigDir     string
 	KeepStageFile bool
-	Noop          bool   `toml:"noop"`
-	Prefix        string `toml:"prefix"`
+	Noop          bool
+	Prefix        string
 	StoreClient   backends.StoreClient
-	SyncOnly      bool `toml:"sync-only"`
+	SyncOnly      bool
 	TemplateDir   string
 	PGPPrivateKey []byte
+	Backend       string
 }
 
 // TemplateResourceConfig holds the parsed template resource.
@@ -60,6 +60,7 @@ type TemplateResource struct {
 	storeClient   backends.StoreClient
 	syncOnly      bool
 	PGPPrivateKey []byte
+	backend       string
 }
 
 var ErrEmptySrc = errors.New("empty src template")
@@ -87,8 +88,12 @@ func NewTemplateResource(path string, config Config) (*TemplateResource, error) 
 	tr.funcMap = newFuncMap()
 	tr.store = memkv.New()
 	tr.syncOnly = config.SyncOnly
+	tr.backend = config.Backend
 	addFuncs(tr.funcMap, tr.store.FuncMap)
 
+	if config.Backend == "sdc" {
+		addSdcFuncs(&tr)
+	}
 	if config.Prefix != "" {
 		tr.Prefix = config.Prefix
 	}
@@ -171,22 +176,150 @@ func addCryptFuncs(tr *TemplateResource) {
 	})
 }
 
+func addSdcFuncs(tr *TemplateResource) {
+	addFuncs(tr.funcMap, map[string]interface{}{
+		"getsdcv": func(scope string, key string) (string, error) {
+			keydir := strings.Split(key, "/")
+			key = ""
+			for _, dir := range keydir {
+				if dir == sdc.SdcScope.System || dir == "" {
+					continue
+				}
+				key = key + "/" + dir
+			}
+
+			scopeKey := ""
+			switch scope {
+			case "system":
+
+				scopeKey = "/" + sdc.SdcScope.System + key
+
+			case "local":
+				scopeKey = "/" + sdc.SdcScope.System + "/" + sdc.SdcScope.Local + key
+			case "any":
+				kv, err := tr.funcMap["get"].(func(string) (memkv.KVPair, error))("/" + sdc.SdcScope.System + key)
+				if err == nil {
+					return kv.Value, nil
+				}
+				kv, err = tr.funcMap["get"].(func(string) (memkv.KVPair, error))("/" + sdc.SdcScope.System + "/" + sdc.SdcScope.Local + key)
+				if err != nil {
+					return "", err
+				}
+				return kv.Value, nil
+			default:
+				return "", &memkv.KeyError{scope, memkv.ErrNoScope}
+			}
+
+			kv, err := tr.funcMap["get"].(func(string) (memkv.KVPair, error))(scopeKey)
+			if err != nil {
+				return "", err
+			}
+			return kv.Value, nil
+		},
+              "getconfigv": func(scope string, key string) (string, error){
+  		        keydir := strings.Split(key, "/")
+			key = ""
+			for _, dir := range keydir {
+				if dir == sdc.SdcScope.System || dir == "" || dir == "config" {
+					continue
+				}
+				key = key + "/" + dir
+			}
+                        
+                        key = "/config" + key
+			scopeKey := ""
+			switch scope {
+			case "system":
+
+				scopeKey = "/" + sdc.SdcScope.System + key
+
+			case "local":
+				scopeKey = "/" + sdc.SdcScope.System + "/" + sdc.SdcScope.Local + key
+			case "any":
+				kv, err := tr.funcMap["get"].(func(string) (memkv.KVPair, error))("/" + sdc.SdcScope.System + key)
+				if err == nil {
+					return kv.Value, nil
+				}
+				kv, err = tr.funcMap["get"].(func(string) (memkv.KVPair, error))("/" + sdc.SdcScope.System + "/" + sdc.SdcScope.Local + key)
+				if err != nil {
+					return "", err
+				}
+				return kv.Value, nil
+			default:
+				return "", &memkv.KeyError{scope, memkv.ErrNoScope}
+			}
+
+			kv, err := tr.funcMap["get"].(func(string) (memkv.KVPair, error))(scopeKey)
+			if err != nil {
+				return "", err
+			}
+			return kv.Value, nil
+             
+                },
+                 "getservicesv": func(scope string, key string) (string, error){
+  		        keydir := strings.Split(key, "/")
+			key = ""
+			for _, dir := range keydir {
+				if dir == sdc.SdcScope.System || dir == "" || dir == "services"{
+					continue
+				}
+				key = key + "/" + dir
+			}
+                        
+                        key = "/services" + key
+			scopeKey := ""
+			switch scope {
+			case "system":
+
+				scopeKey = "/" + sdc.SdcScope.System + key
+
+			case "local":
+				scopeKey = "/" + sdc.SdcScope.System + "/" + sdc.SdcScope.Local + key
+			case "any":
+				kv, err := tr.funcMap["get"].(func(string) (memkv.KVPair, error))("/" + sdc.SdcScope.System + key)
+				if err == nil {
+					return kv.Value, nil
+				}
+				kv, err = tr.funcMap["get"].(func(string) (memkv.KVPair, error))("/" + sdc.SdcScope.System + "/" + sdc.SdcScope.Local + key)
+				if err != nil {
+					return "", err
+				}
+				return kv.Value, nil
+			default:
+				return "", &memkv.KeyError{scope, memkv.ErrNoScope}
+			}
+
+			kv, err := tr.funcMap["get"].(func(string) (memkv.KVPair, error))(scopeKey)
+			if err != nil {
+				return "", err
+			}
+			return kv.Value, nil
+             
+                },
+
+	})
+}
+
 // setVars sets the Vars for template resource.
 func (t *TemplateResource) setVars() error {
 	var err error
 	log.Debug("Retrieving keys from store")
 	log.Debug("Key prefix set to " + t.Prefix)
 
-	result, err := t.storeClient.GetValues(util.AppendPrefix(t.Prefix, t.Keys))
+	result, err := t.storeClient.GetValues(appendPrefix(t.Prefix, t.Keys))
 	if err != nil {
-		return err
+             	return err
 	}
 	log.Debug("Got the following map from store: %v", result)
 
 	t.store.Purge()
 
 	for k, v := range result {
-		t.store.Set(path.Join("/", strings.TrimPrefix(k, t.Prefix)), v)
+		if t.backend != "sdc" {
+			t.store.Set(path.Join("/", strings.TrimPrefix(k, t.Prefix)), v)
+		} else {
+			t.store.Set(k, v)
+		}
 	}
 	return nil
 }
@@ -198,7 +331,7 @@ func (t *TemplateResource) setVars() error {
 func (t *TemplateResource) createStageFile() error {
 	log.Debug("Using source template " + t.Src)
 
-	if !util.IsFileExist(t.Src) {
+	if !isFileExist(t.Src) {
 		return errors.New("Missing template: " + t.Src)
 	}
 
@@ -244,7 +377,7 @@ func (t *TemplateResource) sync() error {
 	}
 
 	log.Debug("Comparing candidate config to " + t.Dest)
-	ok, err := util.IsConfigChanged(staged, t.Dest)
+	ok, err := sameConfig(staged, t.Dest)
 	if err != nil {
 		log.Error(err.Error())
 	}
@@ -252,7 +385,7 @@ func (t *TemplateResource) sync() error {
 		log.Warning("Noop mode enabled. " + t.Dest + " will not be modified")
 		return nil
 	}
-	if ok {
+	if !ok {
 		log.Info("Target config " + t.Dest + " out of sync")
 		if !t.syncOnly && t.CheckCmd != "" {
 			if err := t.check(); err != nil {
@@ -310,28 +443,22 @@ func (t *TemplateResource) check() error {
 	if err := tmpl.Execute(&cmdBuffer, data); err != nil {
 		return err
 	}
-	return runCommand(cmdBuffer.String())
+	log.Debug("Running " + cmdBuffer.String())
+	c := exec.Command("/bin/sh", "-c", cmdBuffer.String())
+	output, err := c.CombinedOutput()
+	if err != nil {
+		log.Error(fmt.Sprintf("%q", string(output)))
+		return err
+	}
+	log.Debug(fmt.Sprintf("%q", string(output)))
+	return nil
 }
 
 // reload executes the reload command.
 // It returns nil if the reload command returns 0.
 func (t *TemplateResource) reload() error {
-	return runCommand(t.ReloadCmd)
-}
-
-// runCommand is a shared function used by check and reload
-// to run the given command and log its output.
-// It returns nil if the given cmd returns 0.
-// The command can be run on unix and windows.
-func runCommand(cmd string) error {
-	log.Debug("Running " + cmd)
-	var c *exec.Cmd
-	if runtime.GOOS == "windows" {
-		c = exec.Command("cmd", "/C", cmd)
-	} else {
-		c = exec.Command("/bin/sh", "-c", cmd)
-	}
-
+	log.Debug("Running " + t.ReloadCmd)
+	c := exec.Command("/bin/sh", "-c", t.ReloadCmd)
 	output, err := c.CombinedOutput()
 	if err != nil {
 		log.Error(fmt.Sprintf("%q", string(output)))
@@ -365,7 +492,7 @@ func (t *TemplateResource) process() error {
 // setFileMode sets the FileMode.
 func (t *TemplateResource) setFileMode() error {
 	if t.Mode == "" {
-		if !util.IsFileExist(t.Dest) {
+		if !isFileExist(t.Dest) {
 			t.FileMode = 0644
 		} else {
 			fi, err := os.Stat(t.Dest)
